@@ -9,11 +9,14 @@ CORES_RISCO = {
 }
 
 
-def render(df):
+def render(df, modo_lgpd: bool = False):
     col_titulo, col_filtro, col_export = st.columns([6, 1.4, 1.6], vertical_alignment="bottom")
     with col_titulo:
         st.title("Visão Geral")
-        st.caption("Acompanhamento consolidado de desempenho acadêmico e alertas preditivos.")
+        subtitulo = "Acompanhamento consolidado de desempenho acadêmico e alertas preditivos."
+        if modo_lgpd:
+            subtitulo += " (Dados pessoais anonimizados — Modo LGPD)"
+        st.caption(subtitulo)
 
     if df.empty:
         with st.container(border=True):
