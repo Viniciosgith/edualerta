@@ -2,9 +2,12 @@ import io
 import pandas as pd
 import streamlit as st
 from services import (
-    listar_alunos, cadastrar_aluno, excluir_aluno,
-    registrar_desempenho, importar_planilha, popular_dados_demo,
+    listar_alunos, listar_lancamentos_simples, cadastrar_aluno, excluir_aluno,
+    registrar_desempenho, atualizar_desempenho, excluir_desempenho,
+    importar_planilha, popular_dados_demo, higienizar_base,
 )
+
+PERIODOS = ["1º Bimestre", "2º Bimestre", "3º Bimestre", "4º Bimestre", "1º Semestre", "2º Semestre"]
 
 
 def _sugerir_indice(lista: list[str], termos: list[str]) -> int:
@@ -16,7 +19,7 @@ def _sugerir_indice(lista: list[str], termos: list[str]) -> int:
 
 def render():
     st.title("Gestão e Portais")
-    st.caption("Importação de planilhas, cadastros manuais e incorporação em sistemas acadêmicos.")
+    st.caption("Importação validada de planilhas, manutenção de registros e incorporação segura.")
 
     aba_imp, aba_cad, aba_base, aba_portal = st.tabs([
         "Importar Planilha", "Cadastros", "Gerenciar Base", "Integrar em Portais"
@@ -34,7 +37,7 @@ def render():
         modelo.to_excel(buf, index=False)
 
         col_txt, col_dl = st.columns([4, 1.5], vertical_alignment="center")
-        col_txt.write("Compatível com exportações `.csv` ou `.xlsx` do TOTVS RM, SIGAA, Moodle e Google Classroom.")
+        col_txt.write("Compatível com `.csv` ou `.xlsx` do TOTVS RM, SIGAA, Moodle e Google Classroom. Disciplinas são padronizadas automaticamente.")
         col_dl.download_button(
             "Baixar modelo .xlsx", data=buf.getvalue(),
             file_name="modelo_edualerta.xlsx",
@@ -76,8 +79,8 @@ def render():
                             "atividades": None if c_ativ == "(Opcional / ausente)" else c_ativ,
                             "email": None if c_email == "(Opcional / ausente)" else c_email,
                         }
-                        novos, atualizados = importar_planilha(df_up, mapa)
-                        st.success(f"Concluído: {novos} novos e {atualizados} atualizados.")
+                        novos, atualizados, ignorados = importar_planilha(df_up, mapa)
+                        st.success(f"Concluído: {novos} novos, {atualizados} atualizados e {ignorados} inválidos ignorados.")
             except Exception as err:
                 st.error(f"Erro ao ler arquivo: {err}")
 
@@ -91,11 +94,8 @@ def render():
                 turma = st.text_input("Turma ou Curso")
                 email = st.text_input("E-mail")
                 if st.form_submit_button("Salvar estudante", type="primary", use_container_width=True):
-                    if nome and mat and turma:
-                        ok, msg = cadastrar_aluno(nome, mat, turma, email)
-                        st.success(msg) if ok else st.error(msg)
-                    else:
-                        st.warning("Preencha nome, matrícula e turma.")
+                    ok, msg = cadastrar_aluno(nome, mat, turma, email)
+                    st.success(msg) if ok else st.error(msg)
 
         with c_nota:
             alunos = listar_alunos()
@@ -108,50 +108,90 @@ def render():
                     mapa = {f"{a['nome']} ({a['matricula']})": a["id"] for a in alunos}
                     sel = st.selectbox("Estudante", list(mapa.keys()))
                     disc = st.text_input("Disciplina")
-                    per = st.selectbox("Período", ["1º Bimestre", "2º Bimestre", "3º Bimestre", "4º Bimestre", "1º Semestre", "2º Semestre"])
+                    per = st.selectbox("Período", PERIODOS)
                     n1, n2, n3 = st.columns(3)
                     nota = n1.number_input("Nota", 0.0, 10.0, 7.0, 0.5)
                     freq = n2.number_input("Freq. (%)", 0.0, 100.0, 90.0, 1.0)
                     ativ = n3.number_input("Ativ. (%)", 0.0, 100.0, 80.0, 5.0)
                     if st.form_submit_button("Registrar desempenho", type="primary", use_container_width=True):
-                        if disc.strip():
-                            registrar_desempenho(mapa[sel], disc, per, nota, freq, ativ)
-                            st.success("Desempenho registrado.")
-                        else:
-                            st.warning("Informe a disciplina.")
+                        ok, msg = registrar_desempenho(mapa[sel], disc, per, nota, freq, ativ)
+                        st.success(msg) if ok else st.warning(msg)
 
     with aba_base:
-        col_demo, col_del = st.columns(2)
-        with col_demo:
+        col_edit, col_manut = st.columns([3, 2])
+
+        with col_edit:
             with st.container(border=True):
-                st.markdown("**Dados de Demonstração**")
-                st.write("Insere 10 registros variados (sem duplicar existentes) para apresentações e testes.")
+                st.markdown("**Editar ou Excluir Lançamento Individual**")
+                lancs = listar_lancamentos_simples()
+                if not lancs:
+                    st.info("Nenhum lançamento cadastrado.")
+                else:
+                    mapa_l = {
+                        f"#{l['id']} · {l['aluno']} — {l['disciplina']} ({l['periodo']}) | Nota {l['nota']:.1f}": l
+                        for l in lancs
+                    }
+                    sel_l = st.selectbox("Selecionar lançamento", list(mapa_l.keys()))
+                    item = mapa_l[sel_l]
+                    with st.form("form_editar_lanc"):
+                        e_disc = st.text_input("Disciplina", value="" if item["disciplina"] == "(vazio)" else item["disciplina"])
+                        idx_per = PERIODOS.index(item["periodo"]) if item["periodo"] in PERIODOS else 0
+                        e_per = st.selectbox("Período", PERIODOS, index=idx_per)
+                        ec1, ec2, ec3 = st.columns(3)
+                        e_nota = ec1.number_input("Nota", 0.0, 10.0, min(max(item["nota"], 0.0), 10.0), 0.5)
+                        e_freq = ec2.number_input("Freq. (%)", 0.0, 100.0, min(max(item["frequencia"], 0.0), 100.0), 1.0)
+                        e_ativ = ec3.number_input("Ativ. (%)", 0.0, 100.0, min(max(item["atividades"], 0.0), 100.0), 5.0)
+                        b1, b2 = st.columns(2)
+                        salvar_ed = b1.form_submit_button("Salvar alteração", type="primary", use_container_width=True)
+                        excluir_ed = b2.form_submit_button("Excluir lançamento", use_container_width=True)
+
+                        if salvar_ed:
+                            ok, msg = atualizar_desempenho(item["id"], e_disc, e_per, e_nota, e_freq, e_ativ)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.warning(msg)
+                        if excluir_ed:
+                            excluir_desempenho(item["id"])
+                            st.success("Lançamento excluído.")
+                            st.rerun()
+
+        with col_manut:
+            with st.container(border=True):
+                st.markdown("**Higienização e Demonstração**")
+                st.caption("Padroniza nomes de disciplinas (ex.: MATEMATICA → Matemática) e remove registros vazios.")
+                if st.button("Higienizar base agora", type="primary", use_container_width=True):
+                    rem, pad = higienizar_base()
+                    st.success(f"Limpeza concluída: {rem} vazios removidos e {pad} padronizados.")
+                    if rem or pad:
+                        st.rerun()
                 if st.button("Carregar base demonstrativa", use_container_width=True):
                     qtd = popular_dados_demo()
                     st.success(f"{qtd} registros inseridos.") if qtd else st.info("A base demonstrativa já existe.")
 
-        with col_del:
             with st.container(border=True):
-                st.markdown("**Remover Estudante**")
+                st.markdown("**Remover Estudante (e histórico)**")
                 alunos = listar_alunos()
                 if not alunos:
                     st.info("Nenhum estudante cadastrado.")
                 else:
                     mapa = {f"{a['nome']} — {a['matricula']} ({a['turma']})": a["id"] for a in alunos}
                     alvo = st.selectbox("Estudante", list(mapa.keys()))
-                    if st.button("Excluir selecionado", use_container_width=True):
+                    if st.button("Excluir estudante", use_container_width=True):
                         excluir_aluno(mapa[alvo])
-                        st.success("Registro removido.")
+                        st.success("Estudante removido.")
                         st.rerun()
 
     with aba_portal:
         with st.container(border=True):
-            st.markdown("**1. Incorporação via iframe (Moodle, Google Sites, Intranet)**")
+            st.markdown("**1. Incorporação Segura via Iframe (Moodle, Google Sites, Intranet)**")
+            st.caption("Defina `EMBED_TOKEN` nos Secrets do Streamlit Cloud para habilitar o acesso incorporado sem expor o link público.")
             st.code(
-                '<iframe src="https://edualerta.streamlit.app/?embed=true" width="100%" height="860" style="border:none;"></iframe>',
+                '<iframe src="https://edualerta.streamlit.app/?embed=true&token=SEU_EMBED_TOKEN" width="100%" height="860" style="border:none;"></iframe>',
                 language="html",
             )
-            st.markdown("**2. Contrato JSON para integração via API / Webhook**")
+            st.markdown("**2. Contrato JSON para Integração via API / Webhook**")
             st.code(
                 '{\n  "matricula": "2026102",\n  "nome": "Bruno Henrique Costa",\n  "turma": "ADS - 2º Período",\n  "disciplina": "Algoritmos",\n  "periodo": "1º Semestre",\n  "nota": 6.4,\n  "frequencia": 80.0,\n  "atividades": 35.0\n}',
                 language="json",
