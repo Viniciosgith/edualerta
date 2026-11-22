@@ -49,26 +49,13 @@ if not st.session_state["autenticado"]:
         st.caption("Demonstração: `coordenacao` / `edualerta2026`")
     st.stop()
 
-
-def pg_visao_geral():
-    visao_geral.render(carregar_desempenho(modelo_ia))
-
-
-def pg_estudantes():
-    estudantes.render(carregar_desempenho(modelo_ia))
-
-
-def pg_ia():
-    ia.render(modelo_ia, metricas_ia, matriz_confusao, df_importancias)
-
-
-def pg_gestao():
-    gestao.render()
-
-
 with st.sidebar:
-    st.markdown("### EduAlerta")
-    st.caption("Learning Analytics")
+    import os
+    if os.path.exists("logo.png"):
+        st.image("logo.png", use_container_width=True)
+    else:
+        st.markdown("### EduAlerta")
+        st.caption("Learning Analytics")
 
 navegacao = st.navigation([
     st.Page(pg_visao_geral, title="Visão Geral", icon=":material/dashboard:"),
