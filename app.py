@@ -17,6 +17,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+def obter_logo():
+    for ficheiro in os.listdir("."):
+        if ficheiro.lower() in ("logo.png", "logo.jpg", "logo.jpeg"):
+            return ficheiro
+    return None
+
+
 @st.cache_resource
 def setup():
     inicializar_banco()
@@ -24,6 +31,7 @@ def setup():
 
 
 modelo_ia, metricas_ia, matriz_confusao, df_importancias = setup()
+caminho_logo = obter_logo()
 
 ADMIN_USER = os.getenv("ADMIN_USER", "coordenacao")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "edualerta2026")
@@ -37,7 +45,10 @@ if not st.session_state["autenticado"]:
     with centro:
         st.markdown("<div style='height: 6vh'></div>", unsafe_allow_html=True)
         with st.form("login", border=True):
-            st.subheader("EduAlerta")
+            if caminho_logo:
+                st.image(caminho_logo, use_container_width=True)
+            else:
+                st.subheader("EduAlerta")
             st.caption("Acesso institucional à plataforma de desempenho acadêmico.")
             usuario = st.text_input("Usuário", placeholder="coordenacao")
             senha = st.text_input("Senha", type="password", placeholder="••••••••")
@@ -49,10 +60,26 @@ if not st.session_state["autenticado"]:
         st.caption("Demonstração: `coordenacao` / `edualerta2026`")
     st.stop()
 
+
+def pg_visao_geral():
+    visao_geral.render(carregar_desempenho(modelo_ia))
+
+
+def pg_estudantes():
+    estudantes.render(carregar_desempenho(modelo_ia))
+
+
+def pg_ia():
+    ia.render(modelo_ia, metricas_ia, matriz_confusao, df_importancias)
+
+
+def pg_gestao():
+    gestao.render()
+
+
 with st.sidebar:
-    import os
-    if os.path.exists("logo.png"):
-        st.image("logo.png", use_container_width=True)
+    if caminho_logo:
+        st.image(caminho_logo, use_container_width=True)
     else:
         st.markdown("### EduAlerta")
         st.caption("Learning Analytics")
