@@ -2,12 +2,12 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from alertas import gerar_mensagem_alerta, enviar_email_alerta
-from services import listar_intervencoes, registrar_intervencao
+from services import listar_intervencoes, registrar_intervencao, atualizar_intervencao
 
 
-def render(df):
+def render(df, modo_lgpd: bool = False):
     st.title("Estudantes")
-    st.caption("Prontuário individual, histórico de intervenções e comunicação direta.")
+    st.caption("Prontuário individual, ciclo de intervenções e comunicação direta.")
 
     if df.empty:
         st.info("Cadastre ou importe estudantes em **Gestão e Portais** para consultar prontuários.")
@@ -42,12 +42,31 @@ def render(df):
 
     with aba_int:
         col_hist, col_form = st.columns([3, 2])
+        acoes = listar_intervencoes(aluno_id)
+
         with col_hist:
-            acoes = listar_intervencoes(aluno_id)
             if not acoes:
                 st.info("Nenhuma intervenção registrada para este estudante.")
             else:
-                st.dataframe(pd.DataFrame(acoes), use_container_width=True, hide_index=True)
+                df_acoes = pd.DataFrame(acoes).drop(columns=["id"])
+                st.dataframe(df_acoes, use_container_width=True, hide_index=True)
+
+                with st.form("form_atualizar_intervencao", border=True):
+                    st.markdown("**Atualizar status de intervenção existente**")
+                    mapa_acoes = {
+                        f"#{a['id']} · {a['Tipo']} ({a['Status']}) — {a['Data']}": a
+                        for a in acoes
+                    }
+                    sel_acao = st.selectbox("Intervenção", list(mapa_acoes.keys()))
+                    acao_obj = mapa_acoes[sel_acao]
+                    lista_status = ["Pendente", "Em andamento", "Concluído"]
+                    idx_atual = lista_status.index(acao_obj["Status"]) if acao_obj["Status"] in lista_status else 0
+                    novo_status = st.selectbox("Novo status", lista_status, index=idx_atual)
+                    nova_obs = st.text_input("Nota de acompanhamento / desfecho", placeholder="Ex.: Responsável compareceu e aluno iniciou monitoria")
+                    if st.form_submit_button("Atualizar status", use_container_width=True):
+                        atualizar_intervencao(acao_obj["id"], novo_status, nova_obs)
+                        st.success("Status atualizado.")
+                        st.rerun()
 
         with col_form:
             with st.form("form_intervencao", clear_on_submit=True, border=True):
@@ -60,14 +79,18 @@ def render(df):
                     "Apoio psicopedagógico (NAE)",
                 ])
                 resp = st.text_input("Responsável", value="Coordenação Pedagógica")
-                status = st.selectbox("Status", ["Pendente", "Em andamento", "Concluído"])
+                status = st.selectbox("Status inicial", ["Pendente", "Em andamento", "Concluído"])
                 obs = st.text_area("Observações", height=80)
-                if st.form_submit_button("Salvar", type="primary", use_container_width=True):
+                if st.form_submit_button("Registrar ação", type="primary", use_container_width=True):
                     registrar_intervencao(aluno_id, tipo, resp, status, obs)
                     st.success("Intervenção registrada.")
                     st.rerun()
 
     with aba_notif:
+        if modo_lgpd:
+            st.warning("Desative o **Modo LGPD** no menu lateral para visualizar dados nominais e enviar notificações.")
+            return
+
         pior = df_a.sort_values("Risco IA (%)", ascending=False).iloc[0]
         msg = gerar_mensagem_alerta(
             pior["Aluno"], pior["Turma"], pior["Disciplina"],
