@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import streamlit as st
 from database import inicializar_banco
 from modelo_ml import treinar_modelo
@@ -18,9 +19,11 @@ st.markdown("""
 
 
 def obter_logo():
-    for ficheiro in os.listdir("."):
-        if ficheiro.lower() in ("logo.png", "logo.jpg", "logo.jpeg"):
-            return ficheiro
+    pasta = Path(__file__).resolve().parent
+    extensoes = (".png", ".jpg", ".jpeg", ".webp")
+    for arquivo in pasta.iterdir():
+        if arquivo.is_file() and arquivo.suffix.lower() in extensoes and "logo" in arquivo.name.lower():
+            return str(arquivo)
     return None
 
 
