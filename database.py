@@ -1,11 +1,11 @@
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, DateTime, text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///escola.db")
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
@@ -24,10 +24,16 @@ class Desempenho(Base):
     aluno_id = Column(Integer, ForeignKey("alunos.id"), nullable=False)
     disciplina = Column(String(80), nullable=False)
     nota = Column(Float, nullable=False)
-    frequencia = Column(Float, nullable=False)  # Percentual de 0 a 100
-    periodo = Column(String(30), nullable=False)  # Ex.: 1º Bimestre
+    frequencia = Column(Float, nullable=False)
+    atividades = Column(Float, nullable=False, default=100.0)
+    periodo = Column(String(30), nullable=False)
     criado_em = Column(DateTime, default=datetime.utcnow)
     aluno = relationship("Aluno", back_populates="registros")
 
 def inicializar_banco():
     Base.metadata.create_all(bind=engine)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE desempenho ADD COLUMN atividades FLOAT NOT NULL DEFAULT 100.0"))
+    except Exception:
+        pass
