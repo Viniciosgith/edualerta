@@ -2,40 +2,52 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
 COLUNAS = ["nota", "frequencia", "atividades"]
 
 def treinar_modelo():
-    """Treina modelo Random Forest e retorna modelo, acurácia e peso das variáveis."""
+    """Treina Random Forest e retorna modelo, métricas de validação, matriz de confusão e importância das variáveis."""
     rng = np.random.default_rng(42)
-    qtd = 500
+    qtd = 600
 
     notas = rng.uniform(0, 10, qtd)
     frequencias = rng.uniform(40, 100, qtd)
     atividades = rng.uniform(0, 100, qtd)
 
-    indice = (notas * 5.0) + (frequencias * 0.30) + (atividades * 0.20) + rng.normal(0, 4.0, qtd)
+    indice = (notas * 5.0) + (frequencias * 0.30) + (atividades * 0.20) + rng.normal(0, 3.8, qtd)
     em_risco = ((indice < 62) | (notas < 5.0) | (frequencias < 75.0)).astype(int)
 
     X = pd.DataFrame({"nota": notas, "frequencia": frequencias, "atividades": atividades})
     y = em_risco
 
-    X_treino, X_teste, y_treino, y_teste = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_treino, X_teste, y_treino, y_teste = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
 
-    modelo = RandomForestClassifier(n_estimators=120, random_state=42)
+    modelo = RandomForestClassifier(n_estimators=150, max_depth=8, random_state=42)
     modelo.fit(X_treino, y_treino)
 
-    acuracia = round(accuracy_score(y_teste, modelo.predict(X_teste)) * 100, 1)
+    y_pred = modelo.predict(X_teste)
+    metricas = {
+        "acuracia": round(accuracy_score(y_teste, y_pred) * 100, 1),
+        "precisao": round(precision_score(y_teste, y_pred, zero_division=0) * 100, 1),
+        "recall": round(recall_score(y_teste, y_pred, zero_division=0) * 100, 1),
+        "f1": round(f1_score(y_teste, y_pred, zero_division=0) * 100, 1),
+        "amostras_treino": len(X_treino),
+        "amostras_teste": len(X_teste),
+    }
+
+    matriz = confusion_matrix(y_teste, y_pred)
     importancias = pd.DataFrame({
         "Fator": ["Nota", "Frequência (%)", "Atividades Entregues (%)"],
         "Peso (%)": [round(v * 100, 1) for v in modelo.feature_importances_]
     }).sort_values("Peso (%)", ascending=True)
 
-    return modelo, acuracia, importancias
+    return modelo, metricas, matriz, importancias
 
 def prever_risco_ml(modelo, nota: float, frequencia: float, atividades: float) -> dict:
-    """Calcula probabilidade de risco (0% a 100%) e sugere intervenção pedagógica."""
+    """Calcula probabilidade de risco (0% a 100%), fatores críticos e plano de ação sugerido."""
     entrada = pd.DataFrame([[nota, frequencia, atividades]], columns=COLUNAS)
     prob = round(float(modelo.predict_proba(entrada)[0][1] * 100), 1)
 
@@ -50,11 +62,11 @@ def prever_risco_ml(modelo, nota: float, frequencia: float, atividades: float) -
     if frequencia < 75:
         acoes.append("Acionar coordenação/responsável por risco de reprovação por falta")
     if nota < 6.0:
-        acoes.append("Encaminhar para monitoria ou plantão de dúvidas na disciplina")
+        acoes.append("Encaminhar para monitoria ou plantão de dúvidas")
     if atividades < 60:
-        acoes.append("Revisar engajamento e entregas atrasadas no AVA/portal")
+        acoes.append("Verificar pendências e engajamento no AVA/portal")
     if not acoes:
-        acoes.append("Manter acompanhamento regular")
+        acoes.append("Manter acompanhamento preventivo regular")
 
     return {
         "probabilidade": prob,
