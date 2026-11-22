@@ -1,3 +1,4 @@
+import hmac
 import os
 import tempfile
 from pathlib import Path
@@ -44,7 +45,6 @@ def obter_logo() -> str | None:
 
 @st.cache_resource
 def preparar_logo(caminho: str) -> str:
-    """Remove o fundo branco e recorta as sobras para o logotipo encaixar no cabeçalho."""
     img = Image.open(caminho).convert("RGBA")
     arr = np.array(img)
     fundo_branco = (arr[:, :, 0] > 235) & (arr[:, :, 1] > 235) & (arr[:, :, 2] > 235)
@@ -70,7 +70,15 @@ caminho_logo = preparar_logo(arquivo_logo) if arquivo_logo else None
 
 ADMIN_USER = os.getenv("ADMIN_USER", "coordenacao")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "edualerta2026")
-MODO_EMBED = st.query_params.get("embed") == "true"
+EMBED_TOKEN = os.getenv("EMBED_TOKEN", "")
+USANDO_SENHA_DEMO = ADMIN_PASSWORD == "edualerta2026"
+
+token_url = st.query_params.get("token", "")
+MODO_EMBED = (
+    st.query_params.get("embed") == "true"
+    and bool(EMBED_TOKEN)
+    and hmac.compare_digest(token_url, EMBED_TOKEN)
+)
 
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = MODO_EMBED
@@ -88,23 +96,33 @@ if not st.session_state["autenticado"]:
             usuario = st.text_input("Usuário", placeholder="coordenacao")
             senha = st.text_input("Senha", type="password", placeholder="••••••••")
             if st.form_submit_button("Entrar", type="primary", use_container_width=True):
-                if usuario.strip() == ADMIN_USER and senha == ADMIN_PASSWORD:
+                user_ok = hmac.compare_digest(usuario.strip(), ADMIN_USER)
+                pass_ok = hmac.compare_digest(senha, ADMIN_PASSWORD)
+                if user_ok and pass_ok:
                     st.session_state["autenticado"] = True
                     st.rerun()
                 st.error("Credenciais inválidas.")
-        st.caption("Demonstração: `coordenacao` / `edualerta2026`")
+        if USANDO_SENHA_DEMO:
+            st.caption("Demonstração: `coordenacao` / `edualerta2026`")
     st.stop()
 
 if caminho_logo:
     st.logo(caminho_logo, size="large")
 
+with st.sidebar:
+    modo_lgpd = st.toggle(
+        "Modo LGPD (Anonimizado)",
+        value=False,
+        help="Oculta nomes, matrículas e e-mails para apresentações e reuniões.",
+    )
+
 
 def pg_visao_geral():
-    visao_geral.render(carregar_desempenho(modelo_ia))
+    visao_geral.render(carregar_desempenho(modelo_ia, anonimizar=modo_lgpd), modo_lgpd=modo_lgpd)
 
 
 def pg_estudantes():
-    estudantes.render(carregar_desempenho(modelo_ia))
+    estudantes.render(carregar_desempenho(modelo_ia, anonimizar=modo_lgpd), modo_lgpd=modo_lgpd)
 
 
 def pg_ia():
@@ -123,9 +141,10 @@ navegacao = st.navigation([
 ])
 
 if not MODO_EMBED:
+    badge_lgpd = " · Modo LGPD ativo" if modo_lgpd else ""
     st.markdown(
         f'<div class="top-bar">'
-        f'<span><strong>EduAlerta</strong> · Controle e Alerta de Desempenho Escolar</span>'
+        f'<span><strong>EduAlerta</strong> · Controle e Alerta de Desempenho Escolar{badge_lgpd}</span>'
         f'<span>Random Forest · F1 {metricas_ia["f1"]}%</span>'
         f'</div>',
         unsafe_allow_html=True,
