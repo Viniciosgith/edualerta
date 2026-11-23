@@ -1,158 +1,184 @@
-import hmac
-import os
-import tempfile
-from pathlib import Path
-import numpy as np
-from PIL import Image
+import pandas as pd
+import plotly.express as px
 import streamlit as st
-from database import inicializar_banco
-from modelo_ml import treinar_modelo
-from services import carregar_desempenho
-from views import visao_geral, estudantes, ia, gestao
+from src.database import SessionLocal, Aluno, LogAlerta, init_db, popular_base_inicial
+from src.ml_engine import treinar_pipeline, diagnosticar_aluno
+from src.ai_agent import AgenteRetencaoIA
 
-st.set_page_config(page_title="EduAlerta", layout="wide")
-
-st.markdown("""
-<style>
-    .block-container { padding-top: 1rem; max-width: 1280px; }
-    h1 { font-size: 1.75rem !important; font-weight: 700 !important; letter-spacing: -0.02em; }
-    [data-testid="stMetricValue"] { font-size: 1.65rem !important; font-weight: 600 !important; }
-    [data-testid="stMetricLabel"] { color: #64748b !important; font-size: 0.85rem !important; }
-    [data-testid="stLogo"] { height: 2.3rem !important; width: auto !important; }
-    .top-bar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding-bottom: 0.75rem;
-        margin-bottom: 1rem;
-        border-bottom: 1px solid #e2e8f0;
-        color: #64748b;
-        font-size: 0.85rem;
-    }
-    .top-bar strong { color: #0f172a; font-weight: 600; }
-</style>
-""", unsafe_allow_html=True)
-
-
-def obter_logo() -> str | None:
-    pasta = Path(__file__).resolve().parent
-    extensoes = (".png", ".jpg", ".jpeg", ".webp")
-    for arquivo in pasta.iterdir():
-        if arquivo.is_file() and arquivo.suffix.lower() in extensoes and "logo" in arquivo.name.lower():
-            return str(arquivo)
-    return None
+st.set_page_config(page_title="Sentinela Acadêmico | ML + Agente IA", layout="wide")
 
 
 @st.cache_resource
-def preparar_logo(caminho: str) -> str:
-    img = Image.open(caminho).convert("RGBA")
-    arr = np.array(img)
-    fundo_branco = (arr[:, :, 0] > 235) & (arr[:, :, 1] > 235) & (arr[:, :, 2] > 235)
-    arr[fundo_branco, 3] = 0
-    img_limpa = Image.fromarray(arr)
-    bbox = img_limpa.getbbox()
-    if bbox:
-        img_limpa = img_limpa.crop(bbox)
-    destino = Path(tempfile.gettempdir()) / "edualerta_logo_limpo.png"
-    img_limpa.save(destino, format="PNG")
-    return str(destino)
+def bootstrap():
+    init_db()
+    popular_base_inicial()
+    pipeline, metricas = treinar_pipeline()
+    return pipeline, metricas, AgenteRetencaoIA()
 
 
-@st.cache_resource
-def setup():
-    inicializar_banco()
-    return treinar_modelo()
+pipeline, metricas, agente = bootstrap()
 
 
-modelo_ia, metricas_ia, matriz_confusao, df_importancias = setup()
-arquivo_logo = obter_logo()
-caminho_logo = preparar_logo(arquivo_logo) if arquivo_logo else None
+def carregar_alunos_com_diagnostico():
+    with SessionLocal() as db:
+        alunos = db.query(Aluno).all()
+        linhas = []
+        for a in alunos:
+            dados = {
+                "id": a.id,
+                "matricula": a.matricula,
+                "nome": a.nome,
+                "curso": a.curso,
+                "semestre": a.semestre,
+                "email_aluno": a.email_aluno,
+                "media_notas": a.media_notas,
+                "frequencia_pct": a.frequencia_pct,
+                "acessos_ava_semana": a.acessos_ava_semana,
+                "reprovacoes": a.reprovacoes,
+                "dias_atraso_mensalidade": a.dias_atraso_mensalidade,
+                "satisfacao_curso": a.satisfacao_curso,
+            }
+            res = diagnosticar_aluno(pipeline, dados)
+            dados.update({
+                "diagnostico": res["diagnostico"],
+                "probabilidade": res["probabilidade"],
+                "fatores": " | ".join(res["fatores"]),
+                "resultado_ml": res,
+            })
+            linhas.append(dados)
+        return linhas
 
-ADMIN_USER = os.getenv("ADMIN_USER", "coordenacao")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "edualerta2026")
-EMBED_TOKEN = os.getenv("EMBED_TOKEN", "")
-USANDO_SENHA_DEMO = ADMIN_PASSWORD == "edualerta2026"
 
-token_url = st.query_params.get("token", "")
-MODO_EMBED = (
-    st.query_params.get("embed") == "true"
-    and bool(EMBED_TOKEN)
-    and hmac.compare_digest(token_url, EMBED_TOKEN)
+st.title("Sentinela Acadêmico — Prevenção de Evasão com ML + Agente IA")
+st.caption(
+    f"Modelo Random Forest Multiclasse · Acurácia: {metricas['acuracia']}% · "
+    f"F1-Macro: {metricas['f1_macro']}%"
 )
 
-if "autenticado" not in st.session_state:
-    st.session_state["autenticado"] = MODO_EMBED
-
-if not st.session_state["autenticado"]:
-    _, centro, _ = st.columns([1.2, 1.2, 1.2])
-    with centro:
-        st.markdown("<div style='height: 6vh'></div>", unsafe_allow_html=True)
-        with st.form("login", border=True):
-            if caminho_logo:
-                st.image(caminho_logo, width=220)
-            else:
-                st.subheader("EduAlerta")
-            st.caption("Acesso institucional à plataforma de desempenho acadêmico.")
-            usuario = st.text_input("Usuário", placeholder="coordenacao")
-            senha = st.text_input("Senha", type="password", placeholder="••••••••")
-            if st.form_submit_button("Entrar", type="primary", use_container_width=True):
-                user_ok = hmac.compare_digest(usuario.strip(), ADMIN_USER)
-                pass_ok = hmac.compare_digest(senha, ADMIN_PASSWORD)
-                if user_ok and pass_ok:
-                    st.session_state["autenticado"] = True
-                    st.rerun()
-                st.error("Credenciais inválidas.")
-        if USANDO_SENHA_DEMO:
-            st.caption("Demonstração: `coordenacao` / `edualerta2026`")
-    st.stop()
-
-if caminho_logo:
-    st.logo(caminho_logo, size="large")
-
-with st.sidebar:
-    modo_lgpd = st.toggle(
-        "Modo LGPD (Anonimizado)",
-        value=False,
-        help="Oculta nomes, matrículas e e-mails para apresentações e reuniões.",
-    )
-
-
-def pg_visao_geral():
-    visao_geral.render(carregar_desempenho(modelo_ia, anonimizar=modo_lgpd), modo_lgpd=modo_lgpd)
-
-
-def pg_estudantes():
-    estudantes.render(carregar_desempenho(modelo_ia, anonimizar=modo_lgpd), modo_lgpd=modo_lgpd)
-
-
-def pg_ia():
-    ia.render(modelo_ia, metricas_ia, matriz_confusao, df_importancias)
-
-
-def pg_gestao():
-    gestao.render()
-
-
-navegacao = st.navigation([
-    st.Page(pg_visao_geral, title="Visão Geral", icon=":material/dashboard:"),
-    st.Page(pg_estudantes, title="Estudantes", icon=":material/group:"),
-    st.Page(pg_ia, title="IA Preditiva", icon=":material/analytics:"),
-    st.Page(pg_gestao, title="Gestão e Portais", icon=":material/settings:"),
+aba_radar, aba_agente, aba_sim = st.tabs([
+    "Radar de Risco", "Agente de IA & Alertas", "Cadastrar / Simular Aluno"
 ])
 
-if not MODO_EMBED:
-    badge_lgpd = " · Modo LGPD ativo" if modo_lgpd else ""
-    st.markdown(
-        f'<div class="top-bar">'
-        f'<span><strong>EduAlerta</strong> · Controle e Alerta de Desempenho Escolar{badge_lgpd}</span>'
-        f'<span>Random Forest · F1 {metricas_ia["f1"]}%</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    with st.sidebar:
-        st.divider()
-        if st.button("Sair", use_container_width=True):
-            st.session_state["autenticado"] = False
-            st.rerun()
+registros = carregar_alunos_com_diagnostico()
+df = pd.DataFrame(registros)
 
-navegacao.run()
+with aba_radar:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total de Alunos", len(df))
+    c2.metric("Risco de Evasão", int((df["diagnostico"] == "Risco de Evasão").sum()))
+    c3.metric("Risco de Trancamento", int((df["diagnostico"] == "Risco de Trancamento").sum()))
+    c4.metric("Risco de Mudança", int((df["diagnostico"] == "Risco de Mudança de Curso").sum()))
+
+    col_g, col_t = st.columns([2, 3])
+    with col_g:
+        contagem = df["diagnostico"].value_counts().reset_index()
+        contagem.columns = ["Diagnóstico", "Quantidade"]
+        fig = px.bar(
+            contagem, x="Diagnóstico", y="Quantidade", color="Diagnóstico",
+            color_discrete_map={
+                "Permanência": "#16a34a",
+                "Risco de Mudança de Curso": "#2563eb",
+                "Risco de Trancamento": "#d97706",
+                "Risco de Evasão": "#dc2626",
+            },
+            template="plotly_white",
+        )
+        fig.update_layout(showlegend=False, height=340, margin=dict(l=0, r=0, t=20, b=0))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_t:
+        st.dataframe(
+            df[["nome", "curso", "diagnostico", "probabilidade", "fatores"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+with aba_agente:
+    st.subheader("Central de Orquestração do Agente de IA")
+    mapa_alunos = {f"{r['nome']} — {r['diagnostico']} ({r['probabilidade']}%)": r for r in registros}
+    sel = st.selectbox("Selecione o estudante para o agente analisar", list(mapa_alunos.keys()))
+    aluno_sel = mapa_alunos[sel]
+
+    pacote = agente.gerar_alertas(aluno_sel, aluno_sel["resultado_ml"])
+
+    st.info(
+        f"**Prioridade:** {pacote['prioridade']}  |  "
+        f"**Setor:** {pacote['setor']}  |  "
+        f"**Ação:** {pacote['acao']}"
+    )
+
+    col_coord, col_al = st.columns(2)
+    with col_coord:
+        st.markdown("**Alerta para a Coordenação (Técnico)**")
+        st.text_area("coord", value=pacote["msg_coordenacao"], height=210, label_visibility="collapsed")
+    with col_al:
+        st.markdown("**Alerta para o Estudante (Empático)**")
+        st.text_area("aluno", value=pacote["msg_aluno"], height=210, label_visibility="collapsed")
+
+    if st.button("Disparar alertas agora (Coordenação + Estudante)", type="primary"):
+        agente.disparar_e_registrar(aluno_sel["id"], aluno_sel["resultado_ml"], pacote)
+        st.success(f"Alertas disparados e auditados para {aluno_sel['nome']} e para a Coordenação.")
+
+    st.divider()
+    st.markdown("**Histórico de Disparos Auditados**")
+    with SessionLocal() as db:
+        logs = db.query(LogAlerta).order_by(LogAlerta.criado_em.desc()).limit(10).all()
+        if not logs:
+            st.caption("Nenhum alerta disparado ainda.")
+        else:
+            st.dataframe(
+                [
+                    {
+                        "Data": l.criado_em.strftime("%d/%m/%Y %H:%M"),
+                        "Estudante": l.aluno.nome,
+                        "Diagnóstico": l.diagnostico_ml,
+                        "Prioridade": l.prioridade,
+                        "Status": l.status_envio,
+                    }
+                    for l in logs
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+with aba_sim:
+    st.subheader("Cadastrar Novo Estudante e Testar Predição ao Vivo")
+    with st.form("form_novo_aluno", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        nome = c1.text_input("Nome completo")
+        matricula = c2.text_input("Matrícula")
+        curso = c3.text_input("Curso", value="Análise e Desenv. de Sistemas")
+
+        c4, c5, c6 = st.columns(3)
+        semestre = c4.number_input("Semestre", 1, 10, 2)
+        email = c5.text_input("E-mail do estudante")
+        satisfacao = c6.slider("Satisfação com o curso (1 a 5)", 1, 5, 3)
+
+        c7, c8, c9, c10 = st.columns(4)
+        nota = c7.number_input("Média de notas", 0.0, 10.0, 6.5, 0.1)
+        freq = c8.number_input("Frequência (%)", 0.0, 100.0, 80.0, 1.0)
+        ava = c9.number_input("Acessos AVA / semana", 0, 30, 5)
+        atraso = c10.number_input("Dias de atraso mensalidade", 0, 120, 0)
+        reprov = st.number_input("Reprovações acumuladas", 0, 15, 0)
+
+        if st.form_submit_button("Salvar e analisar com IA", type="primary"):
+            if not (nome.strip() and matricula.strip()):
+                st.error("Preencha nome e matrícula.")
+            else:
+                with SessionLocal() as db:
+                    db.add(Aluno(
+                        matricula=matricula.strip(),
+                        nome=nome.strip(),
+                        curso=curso.strip(),
+                        semestre=int(semestre),
+                        email_aluno=email.strip() or "aluno@faculdade.edu",
+                        media_notas=float(nota),
+                        frequencia_pct=float(freq),
+                        acessos_ava_semana=int(ava),
+                        reprovacoes=int(reprov),
+                        dias_atraso_mensalidade=int(atraso),
+                        satisfacao_curso=int(satisfacao),
+                    ))
+                    db.commit()
+                st.success("Estudante cadastrado e avaliado pelo modelo de ML.")
+                st.rerun()
